@@ -3,71 +3,33 @@ from pydantic import BaseModel
 import yt_dlp
 import os
 import random
-import requests
-import time
 
 app = FastAPI(title="YT-DLP API")
 
 POT_SERVER = os.getenv("POT_SERVER", "http://127.0.0.1:4416")
 
-# Proxy cache
-_proxy_cache = {"list": [], "fetched_at": 0}
-
-
-def fetch_free_proxies():
-    """Free proxy list fetch cheyy (multiple sources)"""
-    now = time.time()
-    # 10 min cache
-    if _proxy_cache["list"] and (now - _proxy_cache["fetched_at"]) < 600:
-        return _proxy_cache["list"]
-
-    proxies = []
-
-    # Source 1: ProxyScrape
-    try:
-        r = requests.get(
-            "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
-            timeout=15,
-        )
-        for line in r.text.strip().split("\n"):
-            line = line.strip()
-            if line and ":" in line:
-                proxies.append(f"http://{line}")
-    except Exception as e:
-        print(f"ProxyScrape fail: {e}")
-
-    # Source 2: TheSpeedX GitHub
-    try:
-        r = requests.get(
-            "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
-            timeout=15,
-        )
-        for line in r.text.strip().split("\n"):
-            line = line.strip()
-            if line and ":" in line:
-                proxies.append(f"http://{line}")
-    except Exception as e:
-        print(f"SpeedX fail: {e}")
-
-    # Dedupe
-    proxies = list(set(proxies))
-    random.shuffle(proxies)
-
-    _proxy_cache["list"] = proxies
-    _proxy_cache["fetched_at"] = now
-
-    print(f"Fetched {len(proxies)} proxies")
-    return proxies
+# Webshare proxies (10)
+PROXIES = [
+    "http://apkzckku-1:wvooiacgae9n@p.webshare.io:80",
+    "http://apkzckku-2:wvooiacgae9n@p.webshare.io:80",
+    "http://apkzckku-3:wvooiacgae9n@p.webshare.io:80",
+    "http://apkzckku-4:wvooiacgae9n@p.webshare.io:80",
+    "http://apkzckku-5:wvooiacgae9n@p.webshare.io:80",
+    "http://apkzckku-6:wvooiacgae9n@p.webshare.io:80",
+    "http://apkzckku-7:wvooiacgae9n@p.webshare.io:80",
+    "http://apkzckku-8:wvooiacgae9n@p.webshare.io:80",
+    "http://apkzckku-9:wvooiacgae9n@p.webshare.io:80",
+    "http://apkzckku-10:wvooiacgae9n@p.webshare.io:80",
+]
 
 
 def get_ydl_opts(fmt="bv*+ba/b", proxy=None):
-    """yt-dlp options build cheyy"""
     opts = {
         "format": fmt,
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        "socket_timeout": 15,
+        "socket_timeout": 20,
         "retries": 2,
         "extractor_args": {
             "youtube": {
@@ -89,31 +51,27 @@ def get_ydl_opts(fmt="bv*+ba/b", proxy=None):
 
 
 def try_extract(url, fmt="bv*+ba/b"):
-    """Multiple proxies try cheyy until success"""
-    proxies = fetch_free_proxies()
+    """Webshare proxies rotate cheyy until success"""
     errors = []
 
-    # Try direct first (no proxy)
-    try:
-        with yt_dlp.YoutubeDL(get_ydl_opts(fmt)) as ydl:
-            return ydl.extract_info(url, download=False)
-    except Exception as e:
-        errors.append(f"direct: {str(e)[:100]}")
+    # Shuffle so we don't always hit proxy 1
+    proxies = PROXIES.copy()
+    random.shuffle(proxies)
 
-    # Try proxies
-    # Only try first 20 (timeout prevent)
-    for i, proxy in enumerate(proxies[:20]):
+    for i, proxy in enumerate(proxies):
         try:
-            print(f"Trying proxy {i+1}: {proxy}")
+            print(f"Trying proxy {i+1}/{len(proxies)}: {proxy.split('@')[1]}")
             with yt_dlp.YoutubeDL(get_ydl_opts(fmt, proxy)) as ydl:
                 info = ydl.extract_info(url, download=False)
-                print(f"✅ Success with {proxy}")
+                print(f"✅ Success with proxy {i+1}")
                 return info
         except Exception as e:
-            errors.append(f"{proxy}: {str(e)[:80]}")
+            err = str(e)[:120]
+            print(f"❌ Proxy {i+1} failed: {err}")
+            errors.append(f"proxy{i+1}: {err}")
             continue
 
-    raise Exception("All proxies failed. Last errors: " + " | ".join(errors[-3:]))
+    raise Exception("All proxies failed. Errors: " + " | ".join(errors[-3:]))
 
 
 class VideoRequest(BaseModel):
@@ -124,6 +82,32 @@ class VideoRequest(BaseModel):
 @app.get("/")
 def root():
     return {"status": "ok", "service": "yt-dlp-api"}
+
+
+@app.get("/test-proxy")
+def test_proxy():
+    """Webshare proxy test cheyy"""
+    import requests
+    results = []
+    for i, proxy in enumerate(PROXIES):
+        try:
+            r = requests.get(
+                "https://ipv4.webshare.io/",
+                proxies={"http": proxy, "https": proxy},
+                timeout=10,
+            )
+            results.append({
+                "proxy": i + 1,
+                "ip": r.text.strip(),
+                "status": "ok"
+            })
+        except Exception as e:
+            results.append({
+                "proxy": i + 1,
+                "status": "fail",
+                "error": str(e)[:80]
+            })
+    return {"results": results}
 
 
 @app.post("/info")
@@ -166,10 +150,3 @@ def get_download_url(req: VideoRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/proxies")
-def list_proxies():
-    """Debug: ethra proxies und ennu kaanan"""
-    proxies = fetch_free_proxies()
-    return {"count": len(proxies), "sample": proxies[:5]}
